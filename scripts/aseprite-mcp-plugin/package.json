@@ -1,0 +1,8 @@
+{
+    "name": "aseprite-mcp-plugin",
+    "displayName": "Aseprite MCP Plugin",
+    "description": "WebSocket bridge for connecting Aseprite to the MCP server for real-time AI-assisted pixel art editing.",
+    "version": "0.1.0",
+    "author": "aseprite_mcp",
+    "api": 1
+}
