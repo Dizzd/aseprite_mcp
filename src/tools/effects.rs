@@ -1,10 +1,9 @@
 use rmcp::schemars;
 use serde::Deserialize;
 
-use crate::aseprite::lua_string;
 use crate::lua_helpers::{LUA_FIND_LAYER, lua_select_layer};
 use crate::server::AsepriteServer;
-use crate::utils::parse_hex_color;
+use crate::utils::{clamp_u32, parse_hex_color};
 
 // ============================================================================
 // Parameter Structs
@@ -41,27 +40,23 @@ pub struct OutlineParams {
 pub async fn replace_color(server: &AsepriteServer, p: ReplaceColorParams) -> Result<String, String> {
     let (fr, fg, fb) = parse_hex_color(&p.from_color);
     let (tr, tg, tb) = parse_hex_color(&p.to_color);
-    let tolerance = p.tolerance.unwrap_or(0);
+    let tolerance = clamp_u32(p.tolerance.unwrap_or(0), 0, 255);
 
     let script = format!(
         r#"local spr = app.sprite
 app.command.ReplaceColor {{
     ui = false,
-    from = Color({fr}, {fg}, {fb}),
-    to = Color({tr}, {tg}, {tb}),
-    tolerance = {tol}
+    from = Color({}, {}, {}),
+    to = Color({}, {}, {}),
+    tolerance = {}
 }}
 spr:saveAs(spr.filename)
-print(json.encode({{status = "replaced", from = {from_s}, to = {to_s}}}))"#,
-        fr = fr,
-        fg = fg,
-        fb = fb,
-        tr = tr,
-        tg = tg,
-        tb = tb,
-        tol = tolerance,
-        from_s = lua_string(&p.from_color),
-        to_s = lua_string(&p.to_color)
+print(json.encode({{status = "replaced", from = "{}", to = "{}"}}))"#,
+        fr, fg, fb,
+        tr, tg, tb,
+        tolerance,
+        p.from_color,
+        p.to_color
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -70,27 +65,23 @@ pub async fn outline(server: &AsepriteServer, p: OutlineParams) -> Result<String
     let frame_num = p.frame.unwrap_or(1);
     let (r, g, b) = parse_hex_color(&p.color);
 
-    let layer_select = if let Some(ref layer_name) = p.layer {
-        format!("{}{}", LUA_FIND_LAYER, lua_select_layer(layer_name, false))
-    } else {
-        String::new()
-    };
+    let layer_select = p.layer.as_ref()
+        .map(|name| format!("{}{}", LUA_FIND_LAYER, lua_select_layer(name, false)))
+        .unwrap_or_default();
 
     let script = format!(
         r#"local spr = app.sprite
-app.frame = spr.frames[{frame}]
-{layer_select}
+app.frame = spr.frames[{}]
+{}
 app.command.Outline {{
     ui = false,
-    color = Color({r}, {g}, {b})
+    color = Color({}, {}, {})
 }}
 spr:saveAs(spr.filename)
 print(json.encode({{status = "outlined"}}))"#,
-        frame = frame_num,
-        layer_select = layer_select,
-        r = r,
-        g = g,
-        b = b
+        frame_num,
+        layer_select,
+        r, g, b
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }

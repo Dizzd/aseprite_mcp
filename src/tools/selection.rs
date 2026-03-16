@@ -1,6 +1,7 @@
 use rmcp::schemars;
 use serde::Deserialize;
 
+use crate::lua_helpers::parse_selection_mode;
 use crate::server::AsepriteServer;
 use crate::utils::parse_hex_color;
 
@@ -39,16 +40,11 @@ pub struct SelectByColorParams {
 // ============================================================================
 
 pub async fn select_region(server: &AsepriteServer, p: SelectRegionParams) -> Result<String, String> {
-    let mode_fn = match p.mode.as_deref() {
-        Some("add") => "add",
-        Some("subtract") => "subtract",
-        Some("intersect") => "intersect",
-        _ => "select",
-    };
+    let mode_fn = parse_selection_mode(p.mode.as_deref());
     let script = format!(
         r#"local spr = app.sprite
 local sel = spr.selection
-sel:{mode}(Rectangle({x}, {y}, {w}, {h}))
+sel:{} (Rectangle({}, {}, {}, {}))
 spr:saveAs(spr.filename)
 local result = {{}}
 result.status = "selected"
@@ -60,11 +56,11 @@ result.bounds = {{
 }}
 result.isEmpty = sel.isEmpty
 print(json.encode(result))"#,
-        mode = mode_fn,
-        x = p.x,
-        y = p.y,
-        w = p.width,
-        h = p.height
+        mode_fn,
+        p.x,
+        p.y,
+        p.width,
+        p.height
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -120,17 +116,17 @@ pub async fn select_by_color(server: &AsepriteServer, p: SelectByColorParams) ->
     let color_hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
     let script = format!(
         r#"local spr = app.sprite
-app.fgColor = Color({r}, {g}, {b})
+app.fgColor = Color({}, {}, {})
 app.command.MaskByColor {{
     ui = false,
-    tolerance = {tolerance}
+    tolerance = {}
 }}
 spr:saveAs(spr.filename)
 local sel = spr.selection
 local result = {{}}
 result.status = "selected_by_color"
-result.color = "{color_hex}"
-result.tolerance = {tolerance}
+result.color = "{}"
+result.tolerance = {}
 result.isEmpty = sel.isEmpty
 if not sel.isEmpty then
     result.bounds = {{
@@ -141,11 +137,10 @@ if not sel.isEmpty then
     }}
 end
 print(json.encode(result))"#,
-        r = r,
-        g = g,
-        b = b,
-        tolerance = tolerance,
-        color_hex = color_hex
+        r, g, b,
+        tolerance,
+        color_hex,
+        tolerance
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }

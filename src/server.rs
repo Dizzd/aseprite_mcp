@@ -6,6 +6,7 @@ use rmcp::{
     service::RequestContext,
 };
 use rmcp::handler::server::tool::Parameters;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{error, info};

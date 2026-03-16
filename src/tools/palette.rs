@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::aseprite::lua_path;
 use crate::server::AsepriteServer;
-use crate::utils::parse_hex_color_with_alpha;
+use crate::utils::{clamp_u32, parse_hex_color_with_alpha};
 
 // ============================================================================
 // Parameter Structs
@@ -72,16 +72,14 @@ pub struct ColorQuantizationParams {
 // ============================================================================
 
 pub async fn get_palette(server: &AsepriteServer, p: GetPaletteParams) -> Result<String, String> {
-    let max_str = if let Some(max) = p.max_colors {
-        format!("local maxColors = {}", max)
-    } else {
-        "local maxColors = #pal".to_string()
-    };
+    let max_str = p.max_colors
+        .map(|m| format!("local maxColors = {}", m))
+        .unwrap_or_else(|| "local maxColors = #pal".to_string());
 
     let script = format!(
         r##"local spr = app.sprite
 local pal = spr.palettes[1]
-{max_str}
+{}
 local colors = {{}}
 local count = math.min(maxColors, #pal)
 for i = 0, count - 1 do
@@ -96,31 +94,33 @@ for i = 0, count - 1 do
     table.insert(colors, entry)
 end
 print(json.encode({{colors = colors, total = #pal}}))"##,
-        max_str = max_str
+        max_str
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
 
 pub async fn set_palette_color(server: &AsepriteServer, p: SetPaletteColorParams) -> Result<String, String> {
-    let mut set_code = String::new();
-    for entry in &p.colors {
-        let (r, g, b, a) = parse_hex_color_with_alpha(&entry.color);
-        set_code.push_str(&format!(
-            "    pal:setColor({}, Color({}, {}, {}, {}))\n",
-            entry.index, r, g, b, a
-        ));
+    if p.colors.is_empty() {
+        return Err("Colors array cannot be empty".to_string());
     }
+
+    let set_code: String = p.colors.iter()
+        .map(|entry| {
+            let (r, g, b, a) = parse_hex_color_with_alpha(&entry.color);
+            format!("    pal:setColor({}, Color({}, {}, {}, {}))\n", entry.index, r, g, b, a)
+        })
+        .collect();
 
     let script = format!(
         r#"local spr = app.sprite
 local pal = spr.palettes[1]
 app.transaction("Set Palette Colors", function()
-{set_code}
+{}
 end)
 spr:saveAs(spr.filename)
-print(json.encode({{status = "updated", colorsSet = {count}}}))"#,
-        set_code = set_code,
-        count = p.colors.len()
+print(json.encode({{status = "updated", colorsSet = {}}}))"#,
+        set_code,
+        p.colors.len()
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -135,12 +135,12 @@ local pal = spr.palettes[1]
 local oldSize = #pal
 app.command.PaletteSize {{
     ui = false,
-    size = {size}
+    size = {}
 }}
 spr:saveAs(spr.filename)
 pal = spr.palettes[1]
 print(json.encode({{status = "resized", oldSize = oldSize, newSize = #pal}}))"#,
-        size = p.size
+        p.size
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -149,11 +149,11 @@ pub async fn load_palette(server: &AsepriteServer, p: LoadPaletteParams) -> Resu
     let pal_path = lua_path(&p.palette_path);
     let script = format!(
         r#"local spr = app.sprite
-spr:loadPalette({path})
+spr:loadPalette({})
 spr:saveAs(spr.filename)
 local pal = spr.palettes[1]
 print(json.encode({{status = "loaded", paletteSize = #pal}}))"#,
-        path = pal_path
+        pal_path
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -163,28 +163,31 @@ pub async fn save_palette(server: &AsepriteServer, p: SavePaletteParams) -> Resu
     let script = format!(
         r#"local spr = app.sprite
 local pal = spr.palettes[1]
-pal:saveAs({out})
-print(json.encode({{status = "saved", paletteSize = #pal, filename = {out}}}))"#,
-        out = out
+pal:saveAs({})
+print(json.encode({{status = "saved", paletteSize = #pal, filename = {}}}))"#,
+        out,
+        out
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
 
 pub async fn color_quantization(server: &AsepriteServer, p: ColorQuantizationParams) -> Result<String, String> {
-    let max_colors = p.max_colors.unwrap_or(256).clamp(2, 256);
+    let max_colors = clamp_u32(p.max_colors.unwrap_or(256), 2, 256);
     let with_alpha = p.with_alpha.unwrap_or(false);
+
     let script = format!(
         r#"local spr = app.sprite
 app.command.ColorQuantization {{
     ui = false,
-    withAlpha = {alpha},
-    maxColors = {max_colors}
+    withAlpha = {},
+    maxColors = {}
 }}
 spr:saveAs(spr.filename)
 local pal = spr.palettes[1]
-print(json.encode({{status = "quantized", paletteSize = #pal, maxColors = {max_colors}}}))"#,
-        alpha = if with_alpha { "true" } else { "false" },
-        max_colors = max_colors
+print(json.encode({{status = "quantized", paletteSize = #pal, maxColors = {}}}))"#,
+        with_alpha,
+        max_colors,
+        max_colors
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }

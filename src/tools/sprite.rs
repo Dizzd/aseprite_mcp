@@ -1,8 +1,10 @@
 use rmcp::schemars;
 use serde::Deserialize;
 
-use crate::aseprite::{lua_path, lua_string};
+use crate::aseprite::lua_path;
+use crate::lua_helpers::parse_color_mode;
 use crate::server::AsepriteServer;
+use crate::utils::validate_dimensions;
 
 // ============================================================================
 // Parameter Structs
@@ -125,43 +127,10 @@ pub struct ReverseFramesParams {
 }
 
 // ============================================================================
-// Tool Implementations
+// Common Lua Script Templates
 // ============================================================================
 
-pub async fn create_sprite(server: &AsepriteServer, p: CreateSpriteParams) -> Result<String, String> {
-    if p.width == 0 || p.height == 0 {
-        return Err("Width and height must be greater than 0".to_string());
-    }
-    if p.output_path.trim().is_empty() {
-        return Err("Output path cannot be empty".to_string());
-    }
-    let color_mode = match p.color_mode.as_deref() {
-        Some("grayscale") => "ColorMode.GRAYSCALE",
-        Some("indexed") => "ColorMode.INDEXED",
-        _ => "ColorMode.RGB",
-    };
-    let output = lua_path(&server.resolve_output_path(&p.output_path));
-
-    let script = format!(
-        r#"local spr = Sprite({w}, {h}, {cm})
-spr:saveAs({out})
-local result = {{}}
-result.width = spr.width
-result.height = spr.height
-result.filename = spr.filename
-result.colorMode = tostring(spr.colorMode)
-print(json.encode(result))"#,
-        w = p.width,
-        h = p.height,
-        cm = color_mode,
-        out = output,
-    );
-
-    server.execute_script(&script).await
-}
-
-pub async fn get_sprite_info(server: &AsepriteServer, p: SpriteFileParams) -> Result<String, String> {
-    let script = r#"local spr = app.sprite
+const LUA_GET_SPRITE_INFO: &str = r#"local spr = app.sprite
 if not spr then
     print(json.encode({error = "No sprite loaded"}))
     return
@@ -256,10 +225,47 @@ result.tags = tags
 result.slices = slices
 print(json.encode(result))"#;
 
-    server.execute_script_on_file(&p.file_path, script).await
+// ============================================================================
+// Tool Implementations
+// ============================================================================
+
+pub async fn create_sprite(server: &AsepriteServer, p: CreateSpriteParams) -> Result<String, String> {
+    validate_dimensions(p.width, p.height)?;
+    if p.output_path.trim().is_empty() {
+        return Err("Output path cannot be empty".to_string());
+    }
+
+    let color_mode = match p.color_mode.as_deref() {
+        Some("grayscale") => "ColorMode.GRAYSCALE",
+        Some("indexed") => "ColorMode.INDEXED",
+        _ => "ColorMode.RGB",
+    };
+    let output = lua_path(&server.resolve_output_path(&p.output_path));
+
+    let script = format!(
+        r#"local spr = Sprite({w}, {h}, {cm})
+spr:saveAs({out})
+local result = {{}}
+result.width = spr.width
+result.height = spr.height
+result.filename = spr.filename
+result.colorMode = tostring(spr.colorMode)
+print(json.encode(result))"#,
+        w = p.width,
+        h = p.height,
+        cm = color_mode,
+        out = output,
+    );
+
+    server.execute_script(&script).await
+}
+
+pub async fn get_sprite_info(server: &AsepriteServer, p: SpriteFileParams) -> Result<String, String> {
+    server.execute_script_on_file(&p.file_path, LUA_GET_SPRITE_INFO).await
 }
 
 pub async fn resize_sprite(server: &AsepriteServer, p: ResizeSpriteParams) -> Result<String, String> {
+    validate_dimensions(p.width, p.height)?;
     let output = server.resolve_output_path(p.output_path.as_deref().unwrap_or(&p.file_path));
     let script = format!(
         r#"local spr = app.sprite
@@ -299,35 +305,34 @@ print(json.encode(result))"#,
 }
 
 pub async fn flip_sprite(server: &AsepriteServer, p: FlipSpriteParams) -> Result<String, String> {
+    let direction = p.direction.to_lowercase();
+    if direction != "horizontal" && direction != "vertical" {
+        return Err("direction must be 'horizontal' or 'vertical'".to_string());
+    }
+
     let output = server.resolve_output_path(p.output_path.as_deref().unwrap_or(&p.file_path));
-    match p.direction.to_lowercase().as_str() {
-        "horizontal" | "vertical" => {}
-        _ => return Err("direction must be 'horizontal' or 'vertical'".to_string()),
-    };
     let script = format!(
         r#"local spr = app.sprite
 app.command.Flip {{
     ui = false,
     target = "canvas",
-    orientation = {orient}
+    orientation = "{orient}"
 }}
 spr:saveCopyAs({out})
-print(json.encode({{status = "flipped", direction = {dir}}}))"#,
-        orient = lua_string(match p.direction.to_lowercase().as_str() {
-            "horizontal" => "horizontal",
-            _ => "vertical",
-        }),
+print(json.encode({{status = "flipped", direction = "{dir}"}}))"#,
+        orient = direction,
         out = lua_path(&output),
-        dir = lua_string(&p.direction)
+        dir = direction
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
 
 pub async fn rotate_sprite(server: &AsepriteServer, p: RotateSpriteParams) -> Result<String, String> {
-    let output = server.resolve_output_path(p.output_path.as_deref().unwrap_or(&p.file_path));
     if p.angle != 90 && p.angle != 180 && p.angle != 270 {
         return Err("angle must be 90, 180, or 270".to_string());
     }
+
+    let output = server.resolve_output_path(p.output_path.as_deref().unwrap_or(&p.file_path));
     let script = format!(
         r#"local spr = app.sprite
 app.command.Rotate {{
@@ -400,7 +405,7 @@ pub async fn auto_crop_sprite(server: &AsepriteServer, p: AutoCropParams) -> Res
         r#"local spr = app.sprite
 local oldW, oldH = spr.width, spr.height
 app.command.AutocropSprite()
-{save}
+{}
 local result = {{}}
 result.oldWidth = oldW
 result.oldHeight = oldH
@@ -408,18 +413,16 @@ result.width = spr.width
 result.height = spr.height
 result.status = "auto_cropped"
 print(json.encode(result))"#,
-        save = save_code
+        save_code
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
 
 pub async fn change_color_mode(server: &AsepriteServer, p: ChangeColorModeParams) -> Result<String, String> {
-    let format_str = match p.color_mode.to_lowercase().as_str() {
-        "rgb" => "rgb",
-        "grayscale" => "gray",
-        "indexed" => "indexed",
-        _ => return Err("color_mode must be 'rgb', 'grayscale', or 'indexed'".to_string()),
-    };
+    let format_str = parse_color_mode(Some(&p.color_mode));
+    if !["rgb", "gray", "indexed"].contains(&format_str) {
+        return Err("color_mode must be 'rgb', 'grayscale', or 'indexed'".to_string());
+    }
 
     let save_code = if let Some(ref output) = p.output_path {
         let out = lua_path(&server.resolve_output_path(output));
@@ -432,34 +435,30 @@ pub async fn change_color_mode(server: &AsepriteServer, p: ChangeColorModeParams
         r#"local spr = app.sprite
 app.command.ChangePixelFormat {{
     ui = false,
-    format = "{format}"
+    format = "{}"
 }}
-{save}
+{}
 local result = {{}}
 result.colorMode = tostring(spr.colorMode)
 result.width = spr.width
 result.height = spr.height
 result.status = "color_mode_changed"
 print(json.encode(result))"#,
-        format = format_str,
-        save = save_code
+        format_str, save_code
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
 
 pub async fn reverse_frames(server: &AsepriteServer, p: ReverseFramesParams) -> Result<String, String> {
     let from = p.from_frame.unwrap_or(1);
-    let to_code = if let Some(to) = p.to_frame {
-        format!("local toFrame = {}", to)
-    } else {
-        "local toFrame = #spr.frames".to_string()
-    };
+    let to_code = p.to_frame
+        .map(|to| format!("local toFrame = {}", to))
+        .unwrap_or_else(|| "local toFrame = #spr.frames".to_string());
 
     let script = format!(
         r#"local spr = app.sprite
-local fromFrame = {from}
-{to_code}
--- Select the frame range
+local fromFrame = {}
+{}
 app.frame = spr.frames[fromFrame]
 local range = app.range
 range:clear()
@@ -474,8 +473,7 @@ result.toFrame = toFrame
 result.numFrames = #spr.frames
 result.status = "reversed"
 print(json.encode(result))"#,
-        from = from,
-        to_code = to_code
+        from, to_code
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }

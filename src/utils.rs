@@ -1,3 +1,9 @@
+/// Utility functions for the Aseprite MCP server.
+
+// ============================================================================
+// Color Parsing
+// ============================================================================
+
 /// Validate a hex color string format. Returns Ok(()) if valid, Err with message otherwise.
 pub fn validate_hex_color(hex: &str) -> Result<(), String> {
     let h = hex.trim_start_matches('#');
@@ -36,4 +42,39 @@ pub fn parse_hex_color_with_alpha(hex: &str) -> (u8, u8, u8, u8) {
         255
     };
     (r, g, b, a)
+}
+
+// ============================================================================
+// Numeric Validation
+// ============================================================================
+
+/// Validate that width/height dimensions are valid (> 0).
+pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("Width and height must be greater than 0".to_string());
+    }
+    Ok(())
+}
+
+/// Clamp a value between min and max.
+#[allow(dead_code)]
+pub fn clamp<T: PartialOrd>(value: T, min: T, max: T) -> T {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
+/// Ensure a value is within a valid range, clamping if necessary.
+pub fn clamp_u32(value: u32, min: u32, max: u32) -> u32 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
 }

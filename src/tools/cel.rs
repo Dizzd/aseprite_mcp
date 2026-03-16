@@ -2,7 +2,7 @@ use rmcp::schemars;
 use serde::Deserialize;
 
 use crate::aseprite::lua_string;
-use crate::lua_helpers::LUA_FIND_LAYER;
+use crate::lua_helpers::{lua_require_layer, LUA_FIND_LAYER};
 use crate::server::AsepriteServer;
 
 // ============================================================================
@@ -70,32 +70,29 @@ pub struct NewCelParams {
 // ============================================================================
 
 pub async fn list_cels(server: &AsepriteServer, p: ListCelsParams) -> Result<String, String> {
-    let filter_code = if let Some(ref layer) = p.layer {
+    let filter_code = p.layer.as_ref().map(|layer| {
         format!(
             r#"
-{find_layer}
-local target_layer = find_layer(spr.layers, {name})
+{}
+local target_layer = find_layer(spr.layers, {})
 if not target_layer then
-    print(json.encode({{error = "Layer not found: " .. {name}}}))
+    print(json.encode({{error = "Layer not found: " .. {}}}))
     return
 end"#,
-            find_layer = LUA_FIND_LAYER,
-            name = lua_string(layer)
+            LUA_FIND_LAYER,
+            lua_string(layer),
+            lua_string(layer)
         )
-    } else {
-        String::new()
-    };
+    });
 
-    let frame_filter = if let Some(frame) = p.frame {
-        format!("local target_frame = {}", frame)
-    } else {
-        "local target_frame = nil".to_string()
-    };
+    let frame_filter = p.frame
+        .map(|f| format!("local target_frame = {}", f))
+        .unwrap_or_else(|| "local target_frame = nil".to_string());
 
     let script = format!(
         r#"local spr = app.sprite
-{filter_code}
-{frame_filter}
+{}
+{}
 local cels = {{}}
 for i, cel in ipairs(spr.cels) do
     local include = true
@@ -116,8 +113,8 @@ for i, cel in ipairs(spr.cels) do
     end
 end
 print(json.encode({{cels = cels, total = #cels}}))"#,
-        filter_code = filter_code,
-        frame_filter = frame_filter
+        filter_code.unwrap_or_default(),
+        frame_filter
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -125,15 +122,10 @@ print(json.encode({{cels = cels, total = #cels}}))"#,
 pub async fn move_cel(server: &AsepriteServer, p: MoveCelParams) -> Result<String, String> {
     let script = format!(
         r#"local spr = app.sprite
-{find_layer}
-local layer = find_layer(spr.layers, {name})
-if not layer then
-    print(json.encode({{error = "Layer not found: " .. {name}}}))
-    return
-end
+{}
 local cel = layer:cel({frame})
 if not cel then
-    print(json.encode({{error = "No cel at frame " .. {frame} .. " on layer " .. {name}}}))
+    print(json.encode({{error = "No cel at frame {frame}"}}))
     return
 end
 cel.position = Point({x}, {y})
@@ -145,8 +137,7 @@ result.x = cel.position.x
 result.y = cel.position.y
 result.status = "moved"
 print(json.encode(result))"#,
-        find_layer = LUA_FIND_LAYER,
-        name = lua_string(&p.layer),
+        lua_require_layer(&p.layer),
         frame = p.frame,
         x = p.x,
         y = p.y
@@ -158,15 +149,10 @@ pub async fn set_cel_opacity(server: &AsepriteServer, p: SetCelOpacityParams) ->
     let opacity = p.opacity.min(255);
     let script = format!(
         r#"local spr = app.sprite
-{find_layer}
-local layer = find_layer(spr.layers, {name})
-if not layer then
-    print(json.encode({{error = "Layer not found: " .. {name}}}))
-    return
-end
+{}
 local cel = layer:cel({frame})
 if not cel then
-    print(json.encode({{error = "No cel at frame " .. {frame} .. " on layer " .. {name}}}))
+    print(json.encode({{error = "No cel at frame {frame}"}}))
     return
 end
 cel.opacity = {opacity}
@@ -177,8 +163,7 @@ result.frame = cel.frameNumber
 result.opacity = cel.opacity
 result.status = "updated"
 print(json.encode(result))"#,
-        find_layer = LUA_FIND_LAYER,
-        name = lua_string(&p.layer),
+        lua_require_layer(&p.layer),
         frame = p.frame,
         opacity = opacity
     );
@@ -188,20 +173,15 @@ print(json.encode(result))"#,
 pub async fn clear_cel(server: &AsepriteServer, p: ClearCelParams) -> Result<String, String> {
     let script = format!(
         r#"local spr = app.sprite
-{find_layer}
-local layer = find_layer(spr.layers, {name})
-if not layer then
-    print(json.encode({{error = "Layer not found: " .. {name}}}))
-    return
-end
+{}
 local cel = layer:cel({frame})
 if cel then
     spr:deleteCel(cel)
 end
 spr:saveAs(spr.filename)
-print(json.encode({{status = "cleared", layer = {name}, frame = {frame}}}))"#,
-        find_layer = LUA_FIND_LAYER,
-        name = lua_string(&p.layer),
+print(json.encode({{status = "cleared", layer = {}, frame = {frame}}}))"#,
+        lua_require_layer(&p.layer),
+        lua_string(&p.layer),
         frame = p.frame
     );
     server.execute_script_on_file(&p.file_path, &script).await
@@ -210,12 +190,7 @@ print(json.encode({{status = "cleared", layer = {name}, frame = {frame}}}))"#,
 pub async fn new_cel(server: &AsepriteServer, p: NewCelParams) -> Result<String, String> {
     let script = format!(
         r#"local spr = app.sprite
-{find_layer}
-local layer = find_layer(spr.layers, {name})
-if not layer then
-    print(json.encode({{error = "Layer not found: " .. {name}}}))
-    return
-end
+{}
 local frame = spr.frames[{frame}]
 if not frame then
     print(json.encode({{error = "Frame {frame} does not exist"}}))
@@ -233,8 +208,7 @@ result.height = cel.image.height
 result.opacity = cel.opacity
 result.status = "created"
 print(json.encode(result))"#,
-        find_layer = LUA_FIND_LAYER,
-        name = lua_string(&p.layer),
+        lua_require_layer(&p.layer),
         frame = p.frame
     );
     server.execute_script_on_file(&p.file_path, &script).await

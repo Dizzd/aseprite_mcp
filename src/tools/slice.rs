@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 use crate::aseprite::lua_string;
 use crate::server::AsepriteServer;
+use crate::utils::parse_hex_color_with_alpha;
 
 // ============================================================================
 // Parameter Structs
@@ -61,11 +62,10 @@ pub struct DeleteSliceParams {
 }
 
 // ============================================================================
-// Tool Implementations
+// Common Lua Scripts
 // ============================================================================
 
-pub async fn list_slices(server: &AsepriteServer, file_path: &str) -> Result<String, String> {
-    let script = r##"local spr = app.sprite
+const LUA_LIST_SLICES: &str = r##"local spr = app.sprite
 local slices = {}
 for i, slice in ipairs(spr.slices) do
     local s = {}
@@ -101,7 +101,13 @@ for i, slice in ipairs(spr.slices) do
     table.insert(slices, s)
 end
 print(json.encode({slices = slices, total = #slices}))"##;
-    server.execute_script_on_file(file_path, script).await
+
+// ============================================================================
+// Tool Implementations
+// ============================================================================
+
+pub async fn list_slices(server: &AsepriteServer, file_path: &str) -> Result<String, String> {
+    server.execute_script_on_file(file_path, LUA_LIST_SLICES).await
 }
 
 pub async fn create_slice(server: &AsepriteServer, p: CreateSliceParams) -> Result<String, String> {
@@ -120,21 +126,11 @@ pub async fn create_slice(server: &AsepriteServer, p: CreateSliceParams) -> Resu
         ));
     }
     if let Some(ref color) = p.color {
-        let color_clean = color.trim_start_matches('#');
-        if color_clean.len() >= 6 {
-            let r = u8::from_str_radix(&color_clean[0..2], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&color_clean[2..4], 16).unwrap_or(0);
-            let b = u8::from_str_radix(&color_clean[4..6], 16).unwrap_or(0);
-            let a = if color_clean.len() >= 8 {
-                u8::from_str_radix(&color_clean[6..8], 16).unwrap_or(255)
-            } else {
-                255
-            };
-            extra_code.push_str(&format!(
-                "slice.color = Color({}, {}, {}, {})\n",
-                r, g, b, a
-            ));
-        }
+        let (r, g, b, a) = parse_hex_color_with_alpha(color);
+        extra_code.push_str(&format!(
+            "slice.color = Color({}, {}, {}, {})\n",
+            r, g, b, a
+        ));
     }
     if let Some(ref data) = p.data {
         extra_code.push_str(&format!("slice.data = {}\n", lua_string(data)));
@@ -142,9 +138,9 @@ pub async fn create_slice(server: &AsepriteServer, p: CreateSliceParams) -> Resu
 
     let script = format!(
         r#"local spr = app.sprite
-local slice = spr:newSlice(Rectangle({x}, {y}, {w}, {h}))
-slice.name = {name}
-{extra}
+local slice = spr:newSlice(Rectangle({}, {}, {}, {}))
+slice.name = {}
+{}
 spr:saveAs(spr.filename)
 local result = {{}}
 result.name = slice.name
@@ -170,12 +166,9 @@ if slice.pivot then
 end
 result.status = "created"
 print(json.encode(result))"#,
-        x = p.x,
-        y = p.y,
-        w = p.width,
-        h = p.height,
-        name = lua_string(&p.name),
-        extra = extra_code
+        p.x, p.y, p.width, p.height,
+        lua_string(&p.name),
+        extra_code
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
@@ -183,10 +176,11 @@ print(json.encode(result))"#,
 pub async fn delete_slice(server: &AsepriteServer, p: DeleteSliceParams) -> Result<String, String> {
     let script = format!(
         r#"local spr = app.sprite
-spr:deleteSlice({name})
+spr:deleteSlice({})
 spr:saveAs(spr.filename)
-print(json.encode({{status = "deleted", slice = {name}}}))"#,
-        name = lua_string(&p.name)
+print(json.encode({{status = "deleted", slice = {}}}))"#,
+        lua_string(&p.name),
+        lua_string(&p.name)
     );
     server.execute_script_on_file(&p.file_path, &script).await
 }
